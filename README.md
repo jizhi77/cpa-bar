@@ -42,4 +42,6 @@ swift run CPAQuotaBar
 
 `dist/CPAQuotaBar.app`
 
+`dist/CPAQuotaBar.zip`
+
 这是一个菜单栏模式应用，默认不会显示 Dock 图标。

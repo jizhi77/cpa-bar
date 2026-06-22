@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="CPAQuotaBar"
 DIST_DIR="$ROOT_DIR/dist"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
+ZIP_PATH="$DIST_DIR/$APP_NAME.zip"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -69,6 +70,10 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+rm -f "$ZIP_PATH"
+ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
 
 echo "Built app bundle:"
 echo "$APP_DIR"
+echo "Built archive:"
+echo "$ZIP_PATH"
