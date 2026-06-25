@@ -2,6 +2,7 @@
 dist/
 /.build
 .home/
+.homebrew-cache/
 /Packages
 xcuserdata/
 DerivedData/

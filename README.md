@@ -32,6 +32,21 @@
 swift run CPAQuotaBar
 ```
 
+## Brew 安装
+
+由于当前仓库名不是 `homebrew-*`，第一次需要显式指定 tap URL：
+
+```bash
+brew tap jizhi77/cpa-bar https://github.com/jizhi77/cpa-bar
+brew install --cask jizhi77/cpa-bar/cpa-bar
+```
+
+升级：
+
+```bash
+brew upgrade --cask jizhi77/cpa-bar/cpa-bar
+```
+
 ## 打包成 `.app`
 
 ```bash
