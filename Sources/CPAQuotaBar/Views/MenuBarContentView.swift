@@ -88,17 +88,36 @@ struct MenuBarContentView: View {
     }
 
     private var summarySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                SummaryMetric(title: "账号", value: "\(viewModel.accountCount)")
-                Spacer()
-                SummaryMetric(title: "最近刷新", value: Formatting.lastUpdated(viewModel.lastUpdatedAt))
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 0) {
+                SummaryMetric(
+                    systemImage: "person.crop.circle",
+                    title: "账号",
+                    value: "\(viewModel.accountCount)"
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Divider()
+                    .frame(height: 36)
+
+                SummaryMetric(
+                    systemImage: "clock.arrow.circlepath",
+                    title: "最近刷新",
+                    value: Formatting.lastUpdated(viewModel.lastUpdatedAt)
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 12)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("展示模式")
-                    .font(.caption)
+            Divider()
+                .opacity(0.45)
+
+            HStack(alignment: .center, spacing: 10) {
+                Label("展示模式", systemImage: "rectangle.split.2x1")
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
 
                 Picker("展示模式", selection: Binding(
                     get: { viewModel.displayMode },
@@ -109,10 +128,20 @@ struct MenuBarContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 132)
             }
         }
-        .padding(14)
-        .background(cardBackground)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
@@ -153,10 +182,6 @@ struct MenuBarContentView: View {
         .padding(.vertical, 12)
     }
 
-    private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor))
-    }
 }
 
 private struct ConfigurationSection: View {
@@ -224,17 +249,32 @@ private struct ConfigurationSection: View {
 }
 
 private struct SummaryMetric: View {
+    let systemImage: String
     let title: String
     let value: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.12))
 
-            Text(value)
-                .font(.title3.weight(.semibold))
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 26, height: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Text(value)
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
         }
     }
 }
