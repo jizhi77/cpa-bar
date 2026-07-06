@@ -60,6 +60,15 @@ struct MenuBarContentView: View {
             .help("连接设置")
 
             Button {
+                viewModel.openQuotaPage()
+            } label: {
+                Image(systemName: "safari")
+            }
+            .buttonStyle(.borderless)
+            .disabled(viewModel.hasConfiguration == false)
+            .help("打开 CPA 页面")
+
+            Button {
                 Task {
                     await viewModel.refreshAll()
                 }
@@ -100,25 +109,6 @@ struct MenuBarContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-            }
-
-            HStack(spacing: 8) {
-                Button {
-                    viewModel.openQuotaPage()
-                } label: {
-                    Label("打开 CPA 页面", systemImage: "safari")
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    Task {
-                        await viewModel.refreshAll()
-                    }
-                } label: {
-                    Label("刷新全部额度", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(viewModel.isRefreshingAll)
             }
         }
         .padding(14)
