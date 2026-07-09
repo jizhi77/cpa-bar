@@ -11,3 +11,4 @@ DerivedData/
 .swiftpm/xcode/xcuserdata/
 .swiftpm/xcode/package.xcworkspace/xcuserdata/
 .netrc
+.superpowers/
