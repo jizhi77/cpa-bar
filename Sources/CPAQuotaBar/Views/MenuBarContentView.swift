@@ -145,15 +145,106 @@ struct MenuBarContentView: View {
     }
 
     @ViewBuilder
+    private var managementModeButton: some View {
+        if viewModel.isManagementModeEnabled {
+            HStack(spacing: 8) {
+                if viewModel.hasUnsavedManagementChanges {
+                    Text(viewModel.managementChangeSummaryText)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    viewModel.exitManagementModeDiscardingChanges()
+                } label: {
+                    Label("退出管理", systemImage: "xmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(viewModel.isManagementOperationInProgress)
+                .help(viewModel.hasUnsavedManagementChanges ? "放弃未保存修改并退出" : "退出管理")
+
+                Button {
+                    Task {
+                        await viewModel.saveManagementChanges()
+                    }
+                } label: {
+                    if viewModel.isSavingManagementChanges {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("保存修改", systemImage: "tray.and.arrow.down")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(
+                    viewModel.hasConfiguration == false
+                        || viewModel.hasUnsavedManagementChanges == false
+                        || viewModel.isManagementOperationInProgress
+                )
+            }
+        } else {
+            Button {
+                viewModel.toggleManagementMode()
+            } label: {
+                Label("进入管理", systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(viewModel.hasConfiguration == false)
+        }
+    }
+
+    @ViewBuilder
     private var accountSection: some View {
         if viewModel.accounts.isEmpty, viewModel.isRefreshingAll == false {
             EmptyStateView()
         } else {
             VStack(alignment: .leading, spacing: 12) {
+                accountManagementToolbar
+
                 ForEach(viewModel.accounts) { state in
                     AccountCardView(
                         state: state,
                         displayMode: viewModel.displayMode,
+                        isManagementModeEnabled: viewModel.isManagementModeEnabled,
+                        priorityText: Binding(
+                            get: { viewModel.priorityDraft(for: state.id) },
+                            set: { viewModel.setPriorityDraft($0, for: state.id) }
+                        ),
+                        isStatusUpdating: viewModel.isStatusUpdating(id: state.id),
+                        isPrioritySaving: viewModel.isPrioritySaving(id: state.id),
+                        isDeleting: viewModel.isDeleting(id: state.id) || viewModel.isSavingManagementChanges,
+                        isDeleteConfirmationVisible: viewModel.deleteConfirmationAccountID == state.id,
+                        isPriorityEditing: viewModel.isPriorityEditing(id: state.id),
+                        setDisabledAction: { disabled in
+                            Task {
+                                await viewModel.setAuthFileDisabled(id: state.id, disabled: disabled)
+                            }
+                        },
+                        savePriorityAction: {
+                            Task {
+                                await viewModel.savePriority(id: state.id)
+                            }
+                        },
+                        requestPriorityEditingAction: {
+                            viewModel.requestPriorityEditing(id: state.id)
+                        },
+                        cancelPriorityEditingAction: {
+                            viewModel.cancelPriorityEditing()
+                        },
+                        requestDeleteConfirmationAction: {
+                            viewModel.requestDeleteConfirmation(id: state.id)
+                        },
+                        cancelDeleteConfirmationAction: {
+                            viewModel.cancelDeleteConfirmation()
+                        },
+                        deleteAction: {
+                            Task {
+                                await viewModel.deleteAuthFile(id: state.id)
+                            }
+                        },
                         refreshAction: {
                             Task {
                                 await viewModel.refreshAccount(id: state.id)
@@ -163,6 +254,19 @@ struct MenuBarContentView: View {
                 }
             }
         }
+    }
+
+    private var accountManagementToolbar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Label("账号列表", systemImage: "list.bullet.rectangle")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(viewModel.isManagementModeEnabled ? Color.accentColor : Color.secondary)
+
+            Spacer(minLength: 8)
+
+            managementModeButton
+        }
+        .padding(.horizontal, 2)
     }
 
     private var footer: some View {
@@ -282,6 +386,20 @@ private struct SummaryMetric: View {
 private struct AccountCardView: View {
     let state: AccountQuotaState
     let displayMode: QuotaDisplayMode
+    let isManagementModeEnabled: Bool
+    @Binding var priorityText: String
+    let isStatusUpdating: Bool
+    let isPrioritySaving: Bool
+    let isDeleting: Bool
+    let isDeleteConfirmationVisible: Bool
+    let isPriorityEditing: Bool
+    let setDisabledAction: (Bool) -> Void
+    let savePriorityAction: () -> Void
+    let requestPriorityEditingAction: () -> Void
+    let cancelPriorityEditingAction: () -> Void
+    let requestDeleteConfirmationAction: () -> Void
+    let cancelDeleteConfirmationAction: () -> Void
+    let deleteAction: () -> Void
     let refreshAction: () -> Void
 
     var body: some View {
@@ -291,6 +409,15 @@ private struct AccountCardView: View {
                 compactHeader
             case .full:
                 fullHeader
+            }
+
+            AccountManagementPills(account: state.account)
+
+            if isManagementModeEnabled {
+                managementControls
+                if isDeleteConfirmationVisible {
+                    inlineDeleteConfirmation
+                }
             }
 
             if displayMode == .full, let snapshot = state.snapshot {
@@ -306,8 +433,21 @@ private struct AccountCardView: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
+                .fill(cardBackgroundColor)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(cardBorderColor, lineWidth: state.account.disabled ? 1 : 0)
+        )
+    }
+
+    private var cardBackgroundColor: Color {
+        Color(nsColor: .controlBackgroundColor)
+            .opacity(state.account.disabled ? 0.62 : 1)
+    }
+
+    private var cardBorderColor: Color {
+        state.account.disabled ? Color.secondary.opacity(0.34) : Color.clear
     }
 
     private var accountSubtitle: String {
@@ -323,6 +463,7 @@ private struct AccountCardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(state.account.displayName)
                     .font(.headline)
+                    .foregroundStyle(state.account.disabled ? Color.secondary : Color.primary)
 
                 Text(accountSubtitle)
                     .font(.caption)
@@ -337,8 +478,140 @@ private struct AccountCardView: View {
     }
 
     private var compactHeader: some View {
-        Text(state.account.displayName)
-            .font(.headline)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(state.account.displayName)
+                .font(.headline)
+                .foregroundStyle(state.account.disabled ? Color.secondary : Color.primary)
+        }
+    }
+
+    private var managementControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Label("状态", systemImage: "power")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                Text("启用")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                Toggle("启用", isOn: Binding(
+                    get: { state.account.disabled == false },
+                    set: { enabled in
+                        setDisabledAction(enabled == false)
+                    }
+                ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
+                .disabled(isStatusUpdating || isDeleting)
+
+                if isStatusUpdating {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
+                Button {
+                    requestDeleteConfirmationAction()
+                } label: {
+                    if isDeleting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "trash")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isDeleting)
+                .help("删除认证文件")
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                Label("priority", systemImage: "arrow.up.arrow.down")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                if isPriorityEditing {
+                    TextField("0", text: $priorityText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospacedDigit())
+                        .frame(width: 62)
+                        .disabled(isPrioritySaving || isDeleting)
+
+                    Button(action: savePriorityAction) {
+                        if isPrioritySaving {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark")
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isPrioritySaving || isDeleting)
+                    .help("确认优先级")
+
+                    Button(action: cancelPriorityEditingAction) {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isPrioritySaving || isDeleting)
+                    .help("取消编辑")
+                } else {
+                    Button(action: requestPriorityEditingAction) {
+                        Label(state.account.priorityDisplayText, systemImage: "pencil")
+                            .font(.caption.monospacedDigit())
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isDeleting)
+                    .help("编辑优先级")
+                }
+            }
+        }
+    }
+
+    private var inlineDeleteConfirmation: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+
+            Text("确认删除这个认证文件？")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button("取消", action: cancelDeleteConfirmationAction)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isDeleting)
+
+            Button(role: .destructive, action: deleteAction) {
+                if isDeleting {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Text("确认删除")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isDeleting)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.red.opacity(0.08))
+        )
     }
 
     @ViewBuilder
@@ -388,7 +661,7 @@ private struct AccountCardView: View {
             }
         }
         .buttonStyle(.bordered)
-        .disabled(state.isLoading)
+        .disabled(state.isLoading || isDeleting)
     }
 }
 
@@ -416,6 +689,60 @@ private struct MetadataPills: View {
                 }
             }
         }
+    }
+}
+
+private struct AccountManagementPills: View {
+    let account: CodexAuthFile
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ManagementPill(
+                title: "状态",
+                value: account.managementStatusText,
+                systemImage: account.disabled ? "pause.circle" : "checkmark.circle",
+                tint: account.disabled ? .secondary : .green
+            )
+
+            ManagementPill(
+                title: "priority",
+                value: account.priorityDisplayText,
+                systemImage: "arrow.up.arrow.down",
+                tint: .accentColor
+            )
+        }
+    }
+}
+
+private struct ManagementPill: View {
+    let title: String
+    let value: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: systemImage)
+                .font(.caption2.weight(.semibold))
+
+            Text(title)
+                .foregroundStyle(.secondary)
+
+            Text(value)
+                .fontWeight(.semibold)
+        }
+        .font(.caption)
+        .foregroundStyle(tint)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule()
+                .fill(tint.opacity(0.10))
+        )
+        .overlay(
+            Capsule()
+                .strokeBorder(tint.opacity(0.16), lineWidth: 1)
+        )
     }
 }
 
@@ -528,7 +855,7 @@ private struct EmptyStateView: View {
             Text("没有找到可用的 Codex 认证文件")
                 .font(.headline)
 
-            Text("请确认 CPA 内已经存在通过认证文件方式接入的 Codex 账号，并且该文件没有被停用。")
+            Text("请确认 CPA 内已经存在通过认证文件方式接入的 Codex 账号。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

@@ -21,6 +21,7 @@ enum CPAModelParser {
                 authIndex: normalizedAuthIndex(object["auth_index"] ?? object["authIndex"]),
                 disabled: isDisabled(object),
                 runtimeOnly: isRuntimeOnly(object),
+                priority: safeInteger(object["priority"]),
                 note: object.string("note"),
                 path: object.string("path"),
                 accountID: chatgptAccountID(from: object),
@@ -205,6 +206,24 @@ enum CPAModelParser {
 
     private static func isDisabled(_ object: JSONObject) -> Bool {
         object.boolish("disabled") ?? false
+    }
+
+    private static func safeInteger(_ value: JSONValue?) -> Int? {
+        switch value {
+        case .number(let number):
+            guard number.isFinite,
+                  number.rounded(.towardZero) == number,
+                  number >= Double(Int.min),
+                  number <= Double(Int.max) else {
+                return nil
+            }
+
+            return Int(number)
+        case .string(let string):
+            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            return nil
+        }
     }
 
     private static func normalizedAuthIndex(_ value: JSONValue?) -> String? {

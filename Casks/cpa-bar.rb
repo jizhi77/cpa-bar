@@ -1,6 +1,6 @@
 cask "cpa-bar" do
-  version "1.0.0"
-  sha256 "6272c33bf025e8615de626e9017d339952a47ebca80ed9719fae9a9eef981982"
+  version "1.0.2"
+  sha256 "0c57a784adbb4c9ff9602c79cb3256d7a13c4e29ce4308ee9a0c419fc3d62141"
 
   url "https://github.com/jizhi77/cpa-bar/releases/download/v#{version}/CPAQuotaBar.zip"
   name "CPAQuotaBar"
@@ -12,7 +12,7 @@ cask "cpa-bar" do
     strategy :github_latest
   end
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "CPAQuotaBar.app"
 

@@ -80,20 +80,29 @@ struct CodexAuthFile: Identifiable, Equatable, Sendable {
     let name: String
     let provider: String
     let authIndex: String?
-    let disabled: Bool
+    var disabled: Bool
     let runtimeOnly: Bool
+    var priority: Int?
     let note: String?
     let path: String?
     let accountID: String?
     let planFallback: String?
     let subscriptionActiveUntil: Date?
-    let raw: JSONObject
+    var raw: JSONObject
 
     var id: String { name }
 
     var displayName: String {
         note?.trimmedNonEmpty
             ?? name.removingJSONFileExtension
+    }
+
+    var managementStatusText: String {
+        disabled ? "已停用" : "启用"
+    }
+
+    var priorityDisplayText: String {
+        priority.map(String.init) ?? "未设置"
     }
 }
 
@@ -120,7 +129,7 @@ struct CodexQuotaSnapshot: Equatable, Sendable {
 }
 
 struct AccountQuotaState: Identifiable, Equatable, Sendable {
-    let account: CodexAuthFile
+    var account: CodexAuthFile
     var snapshot: CodexQuotaSnapshot?
     var isLoading: Bool = false
     var errorMessage: String?

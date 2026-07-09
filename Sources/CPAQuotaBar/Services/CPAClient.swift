@@ -44,6 +44,78 @@ private struct APICallResponse: Decodable, Sendable {
     }
 }
 
+private struct AuthFileStatusRequest: Encodable, Sendable {
+    let name: String
+    let disabled: Bool
+}
+
+private struct AuthFilePriorityRequest: Encodable, Sendable {
+    let name: String
+    let priority: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case priority
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+
+        if let priority {
+            try container.encode(priority, forKey: .priority)
+        } else {
+            try container.encodeNil(forKey: .priority)
+        }
+    }
+}
+
+private struct AuthFileDeleteRequest: Encodable, Sendable {
+    let names: [String]
+}
+
+struct CPAClientService: Sendable {
+    let fetchCodexAuthFiles: @Sendable () async throws -> [CodexAuthFile]
+    let fetchQuota: @Sendable (CodexAuthFile) async throws -> CodexQuotaSnapshot
+    let setAuthFileDisabled: @Sendable (String, Bool) async throws -> Void
+    let updateAuthFilePriority: @Sendable (String, Int?) async throws -> Void
+    let deleteAuthFile: @Sendable (String) async throws -> Void
+
+    init(
+        fetchCodexAuthFiles: @escaping @Sendable () async throws -> [CodexAuthFile],
+        fetchQuota: @escaping @Sendable (CodexAuthFile) async throws -> CodexQuotaSnapshot,
+        setAuthFileDisabled: @escaping @Sendable (String, Bool) async throws -> Void,
+        updateAuthFilePriority: @escaping @Sendable (String, Int?) async throws -> Void,
+        deleteAuthFile: @escaping @Sendable (String) async throws -> Void
+    ) {
+        self.fetchCodexAuthFiles = fetchCodexAuthFiles
+        self.fetchQuota = fetchQuota
+        self.setAuthFileDisabled = setAuthFileDisabled
+        self.updateAuthFilePriority = updateAuthFilePriority
+        self.deleteAuthFile = deleteAuthFile
+    }
+
+    init(client: CPAClient) {
+        self.init(
+            fetchCodexAuthFiles: {
+                try await client.fetchCodexAuthFiles()
+            },
+            fetchQuota: { authFile in
+                try await client.fetchQuota(for: authFile)
+            },
+            setAuthFileDisabled: { name, disabled in
+                try await client.setAuthFileDisabled(name: name, disabled: disabled)
+            },
+            updateAuthFilePriority: { name, priority in
+                try await client.updateAuthFilePriority(name: name, priority: priority)
+            },
+            deleteAuthFile: { name in
+                try await client.deleteAuthFile(name: name)
+            }
+        )
+    }
+}
+
 struct CPAClient: Sendable {
     private static let codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
     private static let codexUserAgent = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
@@ -97,6 +169,27 @@ struct CPAClient: Sendable {
         return CPAModelParser.codexQuotaSnapshot(from: bodyObject, fallbackAuthFile: authFile)
     }
 
+    func setAuthFileDisabled(name: String, disabled: Bool) async throws {
+        let body = try JSONEncoder().encode(
+            AuthFileStatusRequest(name: name, disabled: disabled)
+        )
+        try await requestVoid(path: "/auth-files/status", method: "PATCH", body: body)
+    }
+
+    func updateAuthFilePriority(name: String, priority: Int?) async throws {
+        let body = try JSONEncoder().encode(
+            AuthFilePriorityRequest(name: name, priority: priority)
+        )
+        try await requestVoid(path: "/auth-files/fields", method: "PATCH", body: body)
+    }
+
+    func deleteAuthFile(name: String) async throws {
+        let body = try JSONEncoder().encode(
+            AuthFileDeleteRequest(names: [name])
+        )
+        try await requestVoid(path: "/auth-files", method: "DELETE", body: body)
+    }
+
     private func requestJSON<T: Decodable>(path: String, method: String = "GET", body: Data? = nil) async throws -> T {
         let (data, response) = try await performRequest(path: path, method: method, body: body)
         guard (200..<300).contains(response.statusCode) else {
@@ -107,6 +200,13 @@ struct CPAClient: Sendable {
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
             throw CPAClientError.invalidResponse
+        }
+    }
+
+    private func requestVoid(path: String, method: String, body: Data?) async throws {
+        let (data, response) = try await performRequest(path: path, method: method, body: body)
+        guard (200..<300).contains(response.statusCode) else {
+            throw decodeServerError(from: data, fallbackStatusCode: response.statusCode)
         }
     }
 
