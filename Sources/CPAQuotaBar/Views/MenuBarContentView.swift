@@ -39,7 +39,7 @@ struct MenuBarContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("CPA Codex Quota")
+                Text("CPA Quota")
                     .font(.headline)
 
                 Text(viewModel.serverDisplayText)
@@ -93,7 +93,7 @@ struct MenuBarContentView: View {
                 SummaryMetric(
                     systemImage: "person.crop.circle",
                     title: "账号",
-                    value: "\(viewModel.accountCount)"
+                    value: viewModel.accountCountDisplayText
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -198,13 +198,24 @@ struct MenuBarContentView: View {
 
     @ViewBuilder
     private var accountSection: some View {
-        if viewModel.accounts.isEmpty, viewModel.isRefreshingAll == false {
-            EmptyStateView()
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("提供商", selection: Binding(
+                get: { viewModel.authProviderFilter },
+                set: { viewModel.setAuthProviderFilter($0) }
+            )) {
+                ForEach(AuthProviderFilter.allCases) { filter in
+                    Text(filter.title).tag(filter)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            if viewModel.filteredAccounts.isEmpty, viewModel.isRefreshingAll == false {
+                EmptyStateView()
+            } else {
                 accountManagementToolbar
 
-                ForEach(viewModel.accounts) { state in
+                ForEach(viewModel.filteredAccounts) { state in
                     AccountCardView(
                         state: state,
                         displayMode: viewModel.displayMode,
@@ -451,7 +462,7 @@ private struct AccountCardView: View {
     }
 
     private var accountSubtitle: String {
-        var components = [state.account.name]
+        var components = [state.account.providerDisplayName, state.account.name]
         if let accountID = state.account.accountID {
             components.append("ChatGPT ID: \(accountID)")
         }
@@ -698,6 +709,13 @@ private struct AccountManagementPills: View {
     var body: some View {
         FlowLayout(spacing: 6) {
             ManagementPill(
+                title: "提供商",
+                value: account.providerDisplayName,
+                systemImage: account.authProvider == .xai ? "bolt.circle" : "terminal",
+                tint: account.authProvider == .xai ? .primary : .accentColor
+            )
+
+            ManagementPill(
                 title: "状态",
                 value: account.managementStatusText,
                 systemImage: account.disabled ? "pause.circle" : "checkmark.circle",
@@ -787,6 +805,12 @@ private struct QuotaWindowRow: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let detail = window.detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             ProgressBar(percentage: window.remainingPercent)
                 .frame(height: 8)
         }
@@ -852,10 +876,10 @@ private struct ProgressBar: View {
 private struct EmptyStateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("没有找到可用的 Codex 认证文件")
+            Text("没有找到可用的认证文件")
                 .font(.headline)
 
-            Text("请确认 CPA 内已经存在通过认证文件方式接入的 Codex 账号。")
+            Text("请确认 CPA 内已经存在通过认证文件方式接入的 Codex 或 xAI 账号。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

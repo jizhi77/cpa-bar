@@ -75,20 +75,20 @@ private struct AuthFileDeleteRequest: Encodable, Sendable {
 }
 
 struct CPAClientService: Sendable {
-    let fetchCodexAuthFiles: @Sendable () async throws -> [CodexAuthFile]
+    let fetchAuthFiles: @Sendable () async throws -> [CodexAuthFile]
     let fetchQuota: @Sendable (CodexAuthFile) async throws -> CodexQuotaSnapshot
     let setAuthFileDisabled: @Sendable (String, Bool) async throws -> Void
     let updateAuthFilePriority: @Sendable (String, Int?) async throws -> Void
     let deleteAuthFile: @Sendable (String) async throws -> Void
 
     init(
-        fetchCodexAuthFiles: @escaping @Sendable () async throws -> [CodexAuthFile],
+        fetchAuthFiles: @escaping @Sendable () async throws -> [CodexAuthFile],
         fetchQuota: @escaping @Sendable (CodexAuthFile) async throws -> CodexQuotaSnapshot,
         setAuthFileDisabled: @escaping @Sendable (String, Bool) async throws -> Void,
         updateAuthFilePriority: @escaping @Sendable (String, Int?) async throws -> Void,
         deleteAuthFile: @escaping @Sendable (String) async throws -> Void
     ) {
-        self.fetchCodexAuthFiles = fetchCodexAuthFiles
+        self.fetchAuthFiles = fetchAuthFiles
         self.fetchQuota = fetchQuota
         self.setAuthFileDisabled = setAuthFileDisabled
         self.updateAuthFilePriority = updateAuthFilePriority
@@ -97,8 +97,8 @@ struct CPAClientService: Sendable {
 
     init(client: CPAClient) {
         self.init(
-            fetchCodexAuthFiles: {
-                try await client.fetchCodexAuthFiles()
+            fetchAuthFiles: {
+                try await client.fetchAuthFiles()
             },
             fetchQuota: { authFile in
                 try await client.fetchQuota(for: authFile)
@@ -119,6 +119,11 @@ struct CPAClientService: Sendable {
 struct CPAClient: Sendable {
     private static let codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
     private static let codexUserAgent = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
+    private static let xaiBillingURLs = [
+        "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+        "https://cli-chat-proxy.grok.com/v1/billing",
+    ]
+    private static let xaiUserAgent = "grok-pager/0.2.91 grok-shell/0.2.91 (macos; aarch64)"
 
     let configuration: AppConfiguration
     let session: URLSession
@@ -128,12 +133,23 @@ struct CPAClient: Sendable {
         self.session = session
     }
 
-    func fetchCodexAuthFiles() async throws -> [CodexAuthFile] {
+    func fetchAuthFiles() async throws -> [CodexAuthFile] {
         let envelope: AuthFilesEnvelope = try await requestJSON(path: "/auth-files")
-        return CPAModelParser.codexAuthFiles(from: envelope.files ?? [])
+        return CPAModelParser.supportedAuthFiles(from: envelope.files ?? [])
     }
 
     func fetchQuota(for authFile: CodexAuthFile) async throws -> CodexQuotaSnapshot {
+        switch authFile.authProvider {
+        case .codex:
+            return try await fetchCodexQuota(for: authFile)
+        case .xai:
+            return try await fetchXAIQuota(for: authFile)
+        case nil:
+            throw CPAClientError.server(message: "不支持认证文件 \(authFile.name) 的提供商。")
+        }
+    }
+
+    private func fetchCodexQuota(for authFile: CodexAuthFile) async throws -> CodexQuotaSnapshot {
         guard let authIndex = authFile.authIndex else {
             throw CPAClientError.server(message: "认证文件 \(authFile.name) 缺少 auth_index。")
         }
@@ -167,6 +183,63 @@ struct CPAClient: Sendable {
 
         let bodyObject = try normalizedJSONObject(from: response.body)
         return CPAModelParser.codexQuotaSnapshot(from: bodyObject, fallbackAuthFile: authFile)
+    }
+
+    private func fetchXAIQuota(for authFile: CodexAuthFile) async throws -> CodexQuotaSnapshot {
+        guard let authIndex = authFile.authIndex else {
+            throw CPAClientError.server(message: "认证文件 \(authFile.name) 缺少 auth_index。")
+        }
+
+        var headers = [
+            "Authorization": "Bearer $TOKEN$",
+            "x-xai-token-auth": "xai-grok-cli",
+            "x-grok-client-version": "0.2.91",
+            "Accept": "*/*",
+            "User-Agent": Self.xaiUserAgent,
+        ]
+        if let userID = CPAModelParser.xaiUserID(from: authFile.raw) {
+            headers["x-userid"] = userID
+        }
+
+        var successfulResponses: [JSONObject] = []
+        var errors: [Error] = []
+
+        for url in Self.xaiBillingURLs {
+            let request = APICallRequest(
+                authIndex: authIndex,
+                method: "GET",
+                url: url,
+                header: headers,
+                data: nil
+            )
+
+            do {
+                let response = try await performAPICall(request)
+                guard (200..<300).contains(response.statusCode) else {
+                    errors.append(
+                        CPAClientError.apiCall(
+                            statusCode: response.statusCode,
+                            message: apiCallErrorMessage(from: response)
+                        )
+                    )
+                    continue
+                }
+
+                successfulResponses.append(try normalizedJSONObject(from: response.body))
+            } catch {
+                errors.append(error)
+            }
+        }
+
+        if let snapshot = CPAModelParser.xaiQuotaSnapshot(
+            from: successfulResponses,
+            fallbackAuthFile: authFile
+        ) {
+            return snapshot
+        }
+
+        throw errors.first
+            ?? CPAClientError.server(message: "xAI 未返回可展示的额度数据。")
     }
 
     func setAuthFileDisabled(name: String, disabled: Bool) async throws {

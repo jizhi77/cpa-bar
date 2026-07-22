@@ -43,6 +43,10 @@ enum Formatting {
             return "Team"
         case "free":
             return "Free"
+        case "supergrok":
+            return "SuperGrok"
+        case "supergrok-heavy":
+            return "SuperGrok Heavy"
         default:
             return rawValue
         }

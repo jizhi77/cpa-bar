@@ -1,12 +1,13 @@
 import Foundation
 
 enum CPAModelParser {
-    static func codexAuthFiles(from rawFiles: [JSONValue]) -> [CodexAuthFile] {
+    static func supportedAuthFiles(from rawFiles: [JSONValue]) -> [CodexAuthFile] {
         let objects = rawFiles.compactMap(\.objectValue)
         let mergedFiles = mergeAuthFiles(from: objects)
 
         return mergedFiles.compactMap { object in
-            guard isCodexProvider(object) else {
+            let provider = normalizedProvider(object.string("provider") ?? object.string("type") ?? "")
+            guard isSupportedProvider(provider) else {
                 return nil
             }
 
@@ -17,7 +18,7 @@ enum CPAModelParser {
 
             return CodexAuthFile(
                 name: name,
-                provider: normalizedProvider(object.string("provider") ?? object.string("type") ?? "codex"),
+                provider: provider,
                 authIndex: normalizedAuthIndex(object["auth_index"] ?? object["authIndex"]),
                 disabled: isDisabled(object),
                 runtimeOnly: isRuntimeOnly(object),
@@ -32,6 +33,10 @@ enum CPAModelParser {
         }
         .filter { $0.runtimeOnly == false }
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    }
+
+    static func codexAuthFiles(from rawFiles: [JSONValue]) -> [CodexAuthFile] {
+        supportedAuthFiles(from: rawFiles)
     }
 
     static func codexQuotaSnapshot(from response: JSONObject, fallbackAuthFile: CodexAuthFile) -> CodexQuotaSnapshot {
@@ -50,6 +55,97 @@ enum CPAModelParser {
             rateLimitResetCreditsAvailableCount: resetCredits,
             windows: codexWindows(from: response)
         )
+    }
+
+    static func xaiQuotaSnapshot(
+        from responses: [JSONObject],
+        fallbackAuthFile: CodexAuthFile
+    ) -> CodexQuotaSnapshot? {
+        let quotaResponses = responses.map { $0.object("config") ?? $0 }
+        let quotaData = quotaResponses
+            .compactMap(xaiQuotaData(from:))
+            .reduce(XAIQuotaData.empty, mergeXAIQuotaData)
+
+        guard quotaData.hasData else {
+            return nil
+        }
+
+        var windows: [QuotaWindow] = []
+        if quotaData.periodType == "weekly" || quotaData.usagePercent != nil || quotaData.productUsage.isEmpty == false {
+            windows.append(
+                QuotaWindow(
+                    id: "weekly",
+                    title: "周限额",
+                    usedPercent: quotaData.usagePercent,
+                    resetLabel: quotaResetLabel(for: quotaData.periodEnd)
+                )
+            )
+        }
+
+        for (index, product) in quotaData.productUsage.enumerated() {
+            windows.append(
+                QuotaWindow(
+                    id: "product-\(slugify(product.name, fallback: "product-\(index + 1)"))-\(index)",
+                    title: "\(product.name) 使用",
+                    usedPercent: product.usagePercent,
+                    resetLabel: "-"
+                )
+            )
+        }
+
+        if quotaData.monthlyLimitCents != nil || quotaData.usedCents != nil || quotaData.billingPeriodEnd != nil {
+            let includedUsed = quotaData.includedUsedCents
+            let usedPercent = percentage(used: includedUsed, limit: quotaData.monthlyLimitCents)
+            windows.append(
+                QuotaWindow(
+                    id: "monthly-credits",
+                    title: "月度积分",
+                    usedPercent: usedPercent,
+                    resetLabel: quotaResetLabel(for: quotaData.billingPeriodEnd),
+                    detail: currencySummary(used: includedUsed, limit: quotaData.monthlyLimitCents)
+                )
+            )
+        }
+
+        if let onDemandCap = quotaData.onDemandCapCents, onDemandCap > 0 {
+            windows.append(
+                QuotaWindow(
+                    id: "pay-as-you-go",
+                    title: "按量付费",
+                    usedPercent: percentage(used: quotaData.onDemandUsedCents, limit: onDemandCap),
+                    resetLabel: "-",
+                    detail: currencySummary(used: quotaData.onDemandUsedCents, limit: onDemandCap)
+                )
+            )
+        }
+
+        return CodexQuotaSnapshot(
+            planType: xaiPlanType(monthlyLimitCents: quotaData.monthlyLimitCents)
+                ?? fallbackAuthFile.planFallback,
+            subscriptionActiveUntil: nil,
+            rateLimitResetCreditsAvailableCount: nil,
+            windows: windows
+        )
+    }
+
+    static func xaiUserID(from object: JSONObject) -> String? {
+        let metadata = object.object("metadata")
+        let attributes = object.object("attributes")
+        let oauth = object.object("oauth")
+            ?? metadata?.object("oauth")
+            ?? attributes?.object("oauth")
+        let user = object.object("user")
+            ?? metadata?.object("user")
+            ?? attributes?.object("user")
+
+        let candidates: [String?] = [
+            object.string("sub"), object.string("subject"), object.string("user_id"), object.string("userId"),
+            metadata?.string("sub"), metadata?.string("subject"), metadata?.string("user_id"), metadata?.string("userId"),
+            attributes?.string("sub"), attributes?.string("subject"), attributes?.string("user_id"), attributes?.string("userId"),
+            oauth?.string("sub"), oauth?.string("subject"), user?.string("sub"), user?.string("id"),
+        ]
+
+        return candidates.compactMap { $0?.trimmedNonEmpty }.first
     }
 
     static func chatgptAccountID(from object: JSONObject) -> String? {
@@ -181,8 +277,8 @@ enum CPAModelParser {
         return 0
     }
 
-    private static func isCodexProvider(_ object: JSONObject) -> Bool {
-        normalizedProvider(object.string("provider") ?? object.string("type") ?? "") == "codex"
+    private static func isSupportedProvider(_ provider: String) -> Bool {
+        AuthProvider(rawValue: provider) != nil
     }
 
     private static func normalizedProvider(_ rawValue: String) -> String {
@@ -414,6 +510,186 @@ enum CPAModelParser {
 
     private static func numericValue(_ value: JSONValue?) -> Double? {
         value?.doubleValue
+    }
+
+    private struct XAIProductUsage {
+        let name: String
+        let usagePercent: Double?
+    }
+
+    private struct XAIQuotaData {
+        var periodType: String?
+        var usagePercent: Double?
+        var periodEnd: Date?
+        var productUsage: [XAIProductUsage]
+        var monthlyLimitCents: Double?
+        var usedCents: Double?
+        var includedUsedCents: Double?
+        var onDemandCapCents: Double?
+        var onDemandUsedCents: Double?
+        var billingPeriodEnd: Date?
+
+        static let empty = XAIQuotaData(
+            periodType: nil,
+            usagePercent: nil,
+            periodEnd: nil,
+            productUsage: [],
+            monthlyLimitCents: nil,
+            usedCents: nil,
+            includedUsedCents: nil,
+            onDemandCapCents: nil,
+            onDemandUsedCents: nil,
+            billingPeriodEnd: nil
+        )
+
+        var hasData: Bool {
+            usagePercent != nil
+                || productUsage.isEmpty == false
+                || monthlyLimitCents != nil
+                || usedCents != nil
+                || onDemandCapCents != nil
+                || billingPeriodEnd != nil
+        }
+    }
+
+    private static func xaiQuotaData(from response: JSONObject) -> XAIQuotaData? {
+        let period = response.object("currentPeriod") ?? response.object("current_period")
+        let periodType = normalizedXAIPeriodType(period?.string("type"))
+        let usagePercent = normalizedPercentage(
+            numericValue(response["creditUsagePercent"] ?? response["credit_usage_percent"])
+        )
+        let productUsage = (response.array("productUsage") ?? response.array("product_usage") ?? [])
+            .enumerated()
+            .compactMap { index, value -> XAIProductUsage? in
+                guard let product = value.objectValue else {
+                    return nil
+                }
+
+                return XAIProductUsage(
+                    name: product.string("product") ?? "Product \(index + 1)",
+                    usagePercent: normalizedPercentage(
+                        numericValue(product["usagePercent"] ?? product["usage_percent"])
+                    )
+                )
+            }
+
+        let monthlyLimitCents = xaiAmount(response["monthlyLimit"] ?? response["monthly_limit"])
+        let usedCents = xaiAmount(response["used"])
+        let onDemandCapCents = xaiAmount(response["onDemandCap"] ?? response["on_demand_cap"])
+        let explicitOnDemandUsed = xaiAmount(response["onDemandUsed"] ?? response["on_demand_used"])
+        let includedUsedCents: Double?
+        let onDemandUsedCents: Double?
+
+        if let usedCents, let monthlyLimitCents {
+            includedUsedCents = min(usedCents, monthlyLimitCents)
+            onDemandUsedCents = explicitOnDemandUsed ?? max(0, usedCents - monthlyLimitCents)
+        } else {
+            includedUsedCents = usedCents
+            onDemandUsedCents = explicitOnDemandUsed
+        }
+
+        let data = XAIQuotaData(
+            periodType: periodType,
+            usagePercent: usagePercent,
+            periodEnd: parseFlexibleDate(period?["end"]),
+            productUsage: productUsage,
+            monthlyLimitCents: monthlyLimitCents,
+            usedCents: usedCents,
+            includedUsedCents: includedUsedCents,
+            onDemandCapCents: onDemandCapCents,
+            onDemandUsedCents: onDemandUsedCents,
+            billingPeriodEnd: parseFlexibleDate(response["billingPeriodEnd"] ?? response["billing_period_end"])
+        )
+
+        return data.hasData ? data : nil
+    }
+
+    private static func mergeXAIQuotaData(_ lhs: XAIQuotaData, _ rhs: XAIQuotaData) -> XAIQuotaData {
+        XAIQuotaData(
+            periodType: lhs.periodType ?? rhs.periodType,
+            usagePercent: lhs.usagePercent ?? rhs.usagePercent,
+            periodEnd: lhs.periodEnd ?? rhs.periodEnd,
+            productUsage: lhs.productUsage.isEmpty ? rhs.productUsage : lhs.productUsage,
+            monthlyLimitCents: lhs.monthlyLimitCents ?? rhs.monthlyLimitCents,
+            usedCents: lhs.usedCents ?? rhs.usedCents,
+            includedUsedCents: lhs.includedUsedCents ?? rhs.includedUsedCents,
+            onDemandCapCents: lhs.onDemandCapCents ?? rhs.onDemandCapCents,
+            onDemandUsedCents: lhs.onDemandUsedCents ?? rhs.onDemandUsedCents,
+            billingPeriodEnd: lhs.billingPeriodEnd ?? rhs.billingPeriodEnd
+        )
+    }
+
+    private static func normalizedXAIPeriodType(_ value: String?) -> String? {
+        switch value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case let value? where value.contains("weekly"):
+            return "weekly"
+        case let value? where value.contains("monthly"):
+            return "monthly"
+        default:
+            return nil
+        }
+    }
+
+    private static func normalizedPercentage(_ value: Double?) -> Double? {
+        guard let value else {
+            return nil
+        }
+
+        let percentage = (0...1).contains(value) ? value * 100 : value
+        return max(0, min(100, percentage))
+    }
+
+    private static func xaiAmount(_ value: JSONValue?) -> Double? {
+        guard let value else {
+            return nil
+        }
+
+        if let amount = numericValue(value) {
+            return amount
+        }
+
+        return numericValue(value.objectValue?["val"])
+    }
+
+    private static func percentage(used: Double?, limit: Double?) -> Double? {
+        guard let used, let limit, limit > 0 else {
+            return nil
+        }
+
+        return max(0, min(100, used / limit * 100))
+    }
+
+    private static func quotaResetLabel(for date: Date?) -> String {
+        date.map(Formatting.shortDateTime) ?? "-"
+    }
+
+    private static func currencySummary(used: Double?, limit: Double?) -> String? {
+        guard let limit else {
+            return nil
+        }
+
+        let remaining = used.map { max(0, limit - $0) }
+        let limitText = currency(limit)
+        guard let remaining else {
+            return limitText
+        }
+
+        return "\(currency(remaining)) / \(limitText)"
+    }
+
+    private static func currency(_ cents: Double) -> String {
+        String(format: "$%.2f", cents / 100)
+    }
+
+    private static func xaiPlanType(monthlyLimitCents: Double?) -> String? {
+        switch monthlyLimitCents {
+        case 15_000:
+            return "supergrok"
+        case 150_000:
+            return "supergrok-heavy"
+        default:
+            return nil
+        }
     }
 
     private static func codexWindows(from response: JSONObject) -> [QuotaWindow] {

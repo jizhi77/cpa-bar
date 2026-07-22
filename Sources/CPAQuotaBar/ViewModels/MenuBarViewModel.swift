@@ -58,6 +58,7 @@ final class MenuBarViewModel: ObservableObject {
     @Published var managementKey: String
     @Published var isConfigurationExpanded: Bool
     @Published private(set) var displayMode: QuotaDisplayMode
+    @Published private(set) var authProviderFilter: AuthProviderFilter = .all
     @Published private(set) var isManagementModeEnabled = false
     @Published private(set) var accounts: [AccountQuotaState] = []
     @Published private(set) var statusUpdatingAccountIDs: Set<String> = []
@@ -102,6 +103,24 @@ final class MenuBarViewModel: ObservableObject {
         accounts.count
     }
 
+    var filteredAccounts: [AccountQuotaState] {
+        accounts.filter { state in
+            guard let provider = state.account.authProvider else {
+                return false
+            }
+
+            return authProviderFilter.includes(provider)
+        }
+    }
+
+    var accountCountDisplayText: String {
+        guard authProviderFilter != .all else {
+            return "\(accountCount)"
+        }
+
+        return "\(filteredAccounts.count)/\(accountCount)"
+    }
+
     var hasConfiguration: Bool {
         currentConfiguration.isComplete
     }
@@ -143,6 +162,10 @@ final class MenuBarViewModel: ObservableObject {
 
         self.displayMode = displayMode
         configurationStore.saveDisplayMode(displayMode)
+    }
+
+    func setAuthProviderFilter(_ filter: AuthProviderFilter) {
+        authProviderFilter = filter
     }
 
     func toggleManagementMode() {
@@ -273,7 +296,7 @@ final class MenuBarViewModel: ObservableObject {
         let existingStates = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
 
         do {
-            let authFiles = try await client.fetchCodexAuthFiles()
+            let authFiles = try await client.fetchAuthFiles()
             accounts = authFiles.map { authFile in
                 let existingState = existingStates[authFile.id]
                 return AccountQuotaState(
