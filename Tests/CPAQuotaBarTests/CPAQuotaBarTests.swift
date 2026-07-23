@@ -643,7 +643,6 @@ final class CPAQuotaBarTests: XCTestCase {
         viewModel.setAuthProviderFilter(.xai)
 
         XCTAssertEqual(viewModel.filteredAccounts.map { $0.account.name }, ["grok-a.json"])
-        XCTAssertEqual(viewModel.accountCountDisplayText, "1/2")
 
         viewModel.setAuthProviderFilter(.all)
         XCTAssertEqual(viewModel.filteredAccounts.count, 2)

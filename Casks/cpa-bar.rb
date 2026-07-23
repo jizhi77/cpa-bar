@@ -4,7 +4,7 @@ cask "cpa-bar" do
 
   url "https://github.com/jizhi77/cpa-bar/releases/download/v#{version}/CPAQuotaBar.zip"
   name "CPAQuotaBar"
-  desc "Menu bar utility for viewing CPA Codex quotas"
+  desc "Menu bar utility for viewing CPA Codex and xAI quotas"
   homepage "https://github.com/jizhi77/cpa-bar"
 
   livecheck do

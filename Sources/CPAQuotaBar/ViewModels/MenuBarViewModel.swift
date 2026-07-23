@@ -113,14 +113,6 @@ final class MenuBarViewModel: ObservableObject {
         }
     }
 
-    var accountCountDisplayText: String {
-        guard authProviderFilter != .all else {
-            return "\(accountCount)"
-        }
-
-        return "\(filteredAccounts.count)/\(accountCount)"
-    }
-
     var hasConfiguration: Bool {
         currentConfiguration.isComplete
     }
