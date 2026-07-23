@@ -1,6 +1,6 @@
 cask "cpa-bar" do
-  version "1.0.2"
-  sha256 "feef2c557e85316cc9e035d146d720bce19b89900d925671d33e46881b9bd905"
+  version "1.1.0"
+  sha256 "f5a2bbb532ac4d4b8ae41bf184f4c45cc71b42476d27778b023205f1a4fbe6c3"
 
   url "https://github.com/jizhi77/cpa-bar/releases/download/v#{version}/CPAQuotaBar.zip"
   name "CPAQuotaBar"
