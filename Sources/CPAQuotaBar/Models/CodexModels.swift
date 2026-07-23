@@ -16,6 +16,52 @@ enum QuotaDisplayMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum AuthProvider: String, CaseIterable, Identifiable, Sendable {
+    case codex
+    case xai
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        case .xai:
+            return "xAI"
+        }
+    }
+}
+
+enum AuthProviderFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case codex
+    case xai
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all:
+            return "All"
+        case .codex:
+            return "Codex"
+        case .xai:
+            return "xAI"
+        }
+    }
+
+    func includes(_ provider: AuthProvider) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .codex:
+            return provider == .codex
+        case .xai:
+            return provider == .xai
+        }
+    }
+}
+
 struct AppConfiguration: Equatable, Sendable {
     var serverURL: String = "http://192.168.2.20:8317"
     var managementKey: String = ""
@@ -92,6 +138,14 @@ struct CodexAuthFile: Identifiable, Equatable, Sendable {
 
     var id: String { name }
 
+    var authProvider: AuthProvider? {
+        AuthProvider(rawValue: provider)
+    }
+
+    var providerDisplayName: String {
+        authProvider?.title ?? provider
+    }
+
     var displayName: String {
         note?.trimmedNonEmpty
             ?? name.removingJSONFileExtension
@@ -111,6 +165,21 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     let title: String
     let usedPercent: Double?
     let resetLabel: String
+    let detail: String?
+
+    init(
+        id: String,
+        title: String,
+        usedPercent: Double?,
+        resetLabel: String,
+        detail: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.usedPercent = usedPercent
+        self.resetLabel = resetLabel
+        self.detail = detail
+    }
 
     var remainingPercent: Double? {
         guard let usedPercent else {

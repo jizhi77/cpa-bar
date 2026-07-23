@@ -18,7 +18,6 @@ struct MenuBarContentView: View {
                     ConfigurationSection(viewModel: viewModel)
 
                     if viewModel.hasConfiguration {
-                        summarySection
                         accountSection
                     }
                 }
@@ -39,7 +38,7 @@ struct MenuBarContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("CPA Codex Quota")
+                Text("CPA Quota")
                     .font(.headline)
 
                 Text(viewModel.serverDisplayText)
@@ -87,124 +86,15 @@ struct MenuBarContentView: View {
         .padding(16)
     }
 
-    private var summarySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 0) {
-                SummaryMetric(
-                    systemImage: "person.crop.circle",
-                    title: "账号",
-                    value: "\(viewModel.accountCount)"
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                Divider()
-                    .frame(height: 36)
-
-                SummaryMetric(
-                    systemImage: "clock.arrow.circlepath",
-                    title: "最近刷新",
-                    value: Formatting.lastUpdated(viewModel.lastUpdatedAt)
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 12)
-            }
-
-            Divider()
-                .opacity(0.45)
-
-            HStack(alignment: .center, spacing: 10) {
-                Label("展示模式", systemImage: "rectangle.split.2x1")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 8)
-
-                Picker("展示模式", selection: Binding(
-                    get: { viewModel.displayMode },
-                    set: { viewModel.setDisplayMode($0) }
-                )) {
-                    ForEach(QuotaDisplayMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .frame(width: 132)
-            }
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .textBackgroundColor).opacity(0.72))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.18), lineWidth: 1)
-        )
-    }
-
-    @ViewBuilder
-    private var managementModeButton: some View {
-        if viewModel.isManagementModeEnabled {
-            HStack(spacing: 8) {
-                if viewModel.hasUnsavedManagementChanges {
-                    Text(viewModel.managementChangeSummaryText)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Button {
-                    viewModel.exitManagementModeDiscardingChanges()
-                } label: {
-                    Label("退出管理", systemImage: "xmark")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(viewModel.isManagementOperationInProgress)
-                .help(viewModel.hasUnsavedManagementChanges ? "放弃未保存修改并退出" : "退出管理")
-
-                Button {
-                    Task {
-                        await viewModel.saveManagementChanges()
-                    }
-                } label: {
-                    if viewModel.isSavingManagementChanges {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Label("保存修改", systemImage: "tray.and.arrow.down")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(
-                    viewModel.hasConfiguration == false
-                        || viewModel.hasUnsavedManagementChanges == false
-                        || viewModel.isManagementOperationInProgress
-                )
-            }
-        } else {
-            Button {
-                viewModel.toggleManagementMode()
-            } label: {
-                Label("进入管理", systemImage: "slider.horizontal.3")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(viewModel.hasConfiguration == false)
-        }
-    }
-
     @ViewBuilder
     private var accountSection: some View {
-        if viewModel.accounts.isEmpty, viewModel.isRefreshingAll == false {
-            EmptyStateView()
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
-                accountManagementToolbar
+        VStack(alignment: .leading, spacing: 12) {
+            accountControls
 
-                ForEach(viewModel.accounts) { state in
+            if viewModel.filteredAccounts.isEmpty, viewModel.isRefreshingAll == false {
+                EmptyStateView()
+            } else {
+                ForEach(viewModel.filteredAccounts) { state in
                     AccountCardView(
                         state: state,
                         displayMode: viewModel.displayMode,
@@ -256,17 +146,112 @@ struct MenuBarContentView: View {
         }
     }
 
-    private var accountManagementToolbar: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Label("账号列表", systemImage: "list.bullet.rectangle")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(viewModel.isManagementModeEnabled ? Color.accentColor : Color.secondary)
+    private var accountControls: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Picker("账号筛选", selection: Binding(
+                    get: { viewModel.authProviderFilter },
+                    set: { viewModel.setAuthProviderFilter($0) }
+                )) {
+                    ForEach(AuthProviderFilter.allCases) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
 
-            Spacer(minLength: 8)
+                displayModePicker
 
-            managementModeButton
+                if viewModel.isManagementModeEnabled {
+                    Label("管理中", systemImage: "slider.horizontal.3")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Color.accentColor)
+                        .fixedSize()
+                } else {
+                    Button {
+                        viewModel.toggleManagementMode()
+                    } label: {
+                        Label("管理", systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(viewModel.hasConfiguration == false)
+                    .help("管理认证文件")
+                }
+            }
+
+            if viewModel.isManagementModeEnabled {
+                HStack(spacing: 8) {
+                    if viewModel.hasUnsavedManagementChanges {
+                        Text(viewModel.managementChangeSummaryText)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("可编辑账号状态与优先级")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Button {
+                        viewModel.exitManagementModeDiscardingChanges()
+                    } label: {
+                        Label("退出", systemImage: "xmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(viewModel.isManagementOperationInProgress)
+                    .help(viewModel.hasUnsavedManagementChanges ? "放弃未保存修改并退出" : "退出管理")
+
+                    Button {
+                        Task {
+                            await viewModel.saveManagementChanges()
+                        }
+                    } label: {
+                        if viewModel.isSavingManagementChanges {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("保存", systemImage: "tray.and.arrow.down")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(
+                        viewModel.hasConfiguration == false
+                            || viewModel.hasUnsavedManagementChanges == false
+                            || viewModel.isManagementOperationInProgress
+                    )
+                }
+            }
         }
-        .padding(.horizontal, 2)
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor).opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private var displayModePicker: some View {
+        Picker("展示模式", selection: Binding(
+            get: { viewModel.displayMode },
+            set: { viewModel.setDisplayMode($0) }
+        )) {
+            ForEach(QuotaDisplayMode.allCases) { mode in
+                Text(mode.title).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(width: 116)
+        .help("切换展示模式")
     }
 
     private var footer: some View {
@@ -352,37 +337,6 @@ private struct ConfigurationSection: View {
     }
 }
 
-private struct SummaryMetric: View {
-    let systemImage: String
-    let title: String
-    let value: String
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.12))
-
-                Image(systemName: systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 26, height: 26)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption2.weight(.medium))
-                    .foregroundStyle(.secondary)
-
-                Text(value)
-                    .font(.callout.weight(.semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-        }
-    }
-}
-
 private struct AccountCardView: View {
     let state: AccountQuotaState
     let displayMode: QuotaDisplayMode
@@ -451,7 +405,7 @@ private struct AccountCardView: View {
     }
 
     private var accountSubtitle: String {
-        var components = [state.account.name]
+        var components = [state.account.providerDisplayName, state.account.name]
         if let accountID = state.account.accountID {
             components.append("ChatGPT ID: \(accountID)")
         }
@@ -698,6 +652,13 @@ private struct AccountManagementPills: View {
     var body: some View {
         FlowLayout(spacing: 6) {
             ManagementPill(
+                title: "提供商",
+                value: account.providerDisplayName,
+                systemImage: account.authProvider == .xai ? "bolt.circle" : "terminal",
+                tint: account.authProvider == .xai ? .primary : .accentColor
+            )
+
+            ManagementPill(
                 title: "状态",
                 value: account.managementStatusText,
                 systemImage: account.disabled ? "pause.circle" : "checkmark.circle",
@@ -787,6 +748,12 @@ private struct QuotaWindowRow: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let detail = window.detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             ProgressBar(percentage: window.remainingPercent)
                 .frame(height: 8)
         }
@@ -852,10 +819,10 @@ private struct ProgressBar: View {
 private struct EmptyStateView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("没有找到可用的 Codex 认证文件")
+            Text("没有找到可用的认证文件")
                 .font(.headline)
 
-            Text("请确认 CPA 内已经存在通过认证文件方式接入的 Codex 账号。")
+            Text("请确认 CPA 内已经存在通过认证文件方式接入的 Codex 或 xAI 账号。")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }

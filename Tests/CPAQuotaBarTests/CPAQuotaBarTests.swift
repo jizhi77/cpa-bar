@@ -143,6 +143,65 @@ final class CPAQuotaBarTests: XCTestCase {
         XCTAssertEqual(files.map(\.priority), [10, -2, nil, nil, nil])
     }
 
+    func testSupportedAuthFilesIncludesCodexAndXAI() {
+        let files = CPAModelParser.supportedAuthFiles(from: [
+            .object([
+                "name": .string("codex-a.json"),
+                "provider": .string("codex"),
+            ]),
+            .object([
+                "name": .string("grok-a.json"),
+                "provider": .string("x-ai"),
+            ]),
+            .object([
+                "name": .string("claude-a.json"),
+                "provider": .string("claude"),
+            ]),
+        ])
+
+        XCTAssertEqual(files.map(\.name), ["codex-a.json", "grok-a.json"])
+        XCTAssertEqual(files.map(\.provider), ["codex", "xai"])
+        XCTAssertEqual(files.map(\.providerDisplayName), ["Codex", "xAI"])
+    }
+
+    func testXAIQuotaSnapshotBuildsBillingWindows() throws {
+        let authFile = makeAuthFile(name: "grok-a.json", provider: "xai")
+        let response: JSONObject = [
+            "current_period": .object([
+                "type": .string("weekly"),
+                "end": .string("2026-07-30T12:00:00Z"),
+            ]),
+            "credit_usage_percent": .number(25),
+            "product_usage": .array([
+                .object([
+                    "product": .string("Grok 4"),
+                    "usage_percent": .number(60),
+                ]),
+            ]),
+            "monthly_limit": .object(["val": .number(15_000)]),
+            "used": .object(["val": .number(4_500)]),
+            "on_demand_cap": .object(["val": .number(3_000)]),
+            "on_demand_used": .object(["val": .number(600)]),
+            "billing_period_end": .string("2026-08-01T00:00:00Z"),
+        ]
+
+        let snapshot = try XCTUnwrap(
+            CPAModelParser.xaiQuotaSnapshot(from: [response], fallbackAuthFile: authFile)
+        )
+
+        XCTAssertEqual(snapshot.planType, "supergrok")
+        XCTAssertEqual(snapshot.windows.map(\.id), [
+            "weekly",
+            "product-grok-4-0",
+            "monthly-credits",
+            "pay-as-you-go",
+        ])
+        XCTAssertEqual(snapshot.windows[0].usedPercent, 25)
+        XCTAssertEqual(snapshot.windows[1].usedPercent, 60)
+        XCTAssertEqual(snapshot.windows[2].detail, "$105.00 / $150.00")
+        XCTAssertEqual(snapshot.windows[3].detail, "$24.00 / $30.00")
+    }
+
     func testCodexAuthFileManagementDisplayTextShowsStatusAndPriority() {
         let activeAccount = makeAuthFile(name: "codex-a.json", disabled: false, priority: 12)
         let disabledAccount = makeAuthFile(name: "codex-b.json", disabled: true, priority: nil)
@@ -245,6 +304,81 @@ final class CPAQuotaBarTests: XCTestCase {
         XCTAssertEqual(MockURLProtocol.recordedRequests[0].jsonBody?.array("names")?.map(\.stringValue), [
             "codex-a.json",
         ])
+    }
+
+    func testCPAClientFetchesXAIQuotaThroughBothBillingEndpoints() async throws {
+        MockURLProtocol.requestHandler = { request in
+            MockURLProtocol.recordedRequests.append(
+                RecordedRequest(
+                    method: request.httpMethod,
+                    path: request.url?.path,
+                    authorization: request.value(forHTTPHeaderField: "Authorization"),
+                    body: requestBodyText(from: request)
+                )
+            )
+
+            let apiCall = try XCTUnwrap(requestBodyText(from: request)).data(using: .utf8)
+                .flatMap { JSONValue.parse(from: String(decoding: $0, as: UTF8.self))?.objectValue }
+            let url = try XCTUnwrap(apiCall?.string("url"))
+            let body: JSONValue = .object(
+                url.contains("format=credits")
+                    ? [
+                        "status_code": .number(200),
+                        "body": .object([
+                            "current_period": .object([
+                                "type": .string("weekly"),
+                                "end": .string("2026-07-30T12:00:00Z"),
+                            ]),
+                            "credit_usage_percent": .number(35),
+                        ]),
+                    ]
+                    : [
+                        "status_code": .number(200),
+                        "body": .object([
+                            "monthly_limit": .object(["val": .number(15_000)]),
+                            "used": .object(["val": .number(3_000)]),
+                        ]),
+                    ]
+            )
+
+            return (
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!,
+                try JSONSerialization.data(withJSONObject: body.serializableObject)
+            )
+        }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let client = CPAClient(
+            configuration: AppConfiguration(serverURL: "http://cpa.test", managementKey: "management-secret"),
+            session: URLSession(configuration: configuration)
+        )
+        let authFile = makeAuthFile(name: "grok-a.json", provider: "xai")
+
+        let snapshot = try await client.fetchQuota(for: authFile)
+
+        XCTAssertEqual(snapshot.windows.map(\.id), ["weekly", "monthly-credits"])
+        XCTAssertEqual(MockURLProtocol.recordedRequests.count, 2)
+        XCTAssertEqual(MockURLProtocol.recordedRequests.map { $0.path }, [
+            "/v0/management/api-call",
+            "/v0/management/api-call",
+        ])
+        XCTAssertEqual(
+            MockURLProtocol.recordedRequests.compactMap { $0.jsonBody?.string("url") },
+            [
+                "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+                "https://cli-chat-proxy.grok.com/v1/billing",
+            ]
+        )
+        XCTAssertEqual(
+            MockURLProtocol.recordedRequests.first?.jsonBody?.object("header")?.string("x-xai-token-auth"),
+            "xai-grok-cli"
+        )
     }
 
     @MainActor
@@ -494,14 +628,35 @@ final class CPAQuotaBarTests: XCTestCase {
         XCTAssertEqual(viewModel.priorityDraft(for: "codex-a.json"), "3")
     }
 
+    @MainActor
+    func testViewModelFiltersAccountsByProvider() async {
+        let recorder = CPAClientServiceRecorder()
+        let viewModel = makeViewModel(
+            authFiles: [
+                makeAuthFile(name: "codex-a.json", provider: "codex"),
+                makeAuthFile(name: "grok-a.json", provider: "xai"),
+            ],
+            recorder: recorder
+        )
+
+        await viewModel.refreshAll()
+        viewModel.setAuthProviderFilter(.xai)
+
+        XCTAssertEqual(viewModel.filteredAccounts.map { $0.account.name }, ["grok-a.json"])
+
+        viewModel.setAuthProviderFilter(.all)
+        XCTAssertEqual(viewModel.filteredAccounts.count, 2)
+    }
+
     private func makeAuthFile(
         name: String,
+        provider: String = "codex",
         disabled: Bool = false,
         priority: Int? = nil
     ) -> CodexAuthFile {
         CodexAuthFile(
             name: name,
-            provider: "codex",
+            provider: provider,
             authIndex: "1",
             disabled: disabled,
             runtimeOnly: false,
@@ -535,7 +690,7 @@ final class CPAQuotaBarTests: XCTestCase {
             configurationStore: configurationStore,
             clientFactory: { _ in
                 CPAClientService(
-                    fetchCodexAuthFiles: {
+                    fetchAuthFiles: {
                         authFiles
                     },
                     fetchQuota: { _ in
